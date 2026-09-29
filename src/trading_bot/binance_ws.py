@@ -62,7 +62,7 @@ class BinanceBookTickerStream:
                         await self.state.update_best_bid_ask(value)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - reconnect boundary must contain stream failures
                 self.connected = False
                 self.last_error = f"{type(exc).__name__}: {exc}"
                 self.reconnect_count += 1
