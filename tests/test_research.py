@@ -28,18 +28,18 @@ def make_ticks(prices: list[Decimal], *, start_sequence: int = 1) -> list[Record
 
 
 def test_mean_reversion_candidate_round_trip() -> None:
-    prices = [Decimal("100")] * 5 + [Decimal("99")] * 3 + [Decimal("100.5")] * 4
+    prices = [Decimal(100)] * 5 + [Decimal(99)] * 3 + [Decimal("100.5")] * 4
     lab = StrategyResearchLab(
-        starting_quote_balance=Decimal("1000"),
-        quantity=Decimal("1"),
-        fee_bps=Decimal("0"),
-        slippage_bps=Decimal("0"),
+        starting_quote_balance=Decimal(1000),
+        quantity=Decimal(1),
+        fee_bps=Decimal(0),
+        slippage_bps=Decimal(0),
     )
     candidate = StrategyCandidate(
         name="test_mr",
         kind="mean_reversion",
         lookback=5,
-        entry_threshold_bps=Decimal("20"),
+        entry_threshold_bps=Decimal(20),
     )
 
     result = lab.run_candidate(make_ticks(prices), candidate)
@@ -50,12 +50,12 @@ def test_mean_reversion_candidate_round_trip() -> None:
 
 
 def test_suite_is_research_only_and_never_promotes_small_sample() -> None:
-    prices = [Decimal("100") + Decimal(index % 10) / Decimal(100) for index in range(500)]
+    prices = [Decimal(100) + Decimal(index % 10) / Decimal(100) for index in range(500)]
     lab = StrategyResearchLab(
-        starting_quote_balance=Decimal("1000"),
+        starting_quote_balance=Decimal(1000),
         quantity=Decimal("0.1"),
-        fee_bps=Decimal("10"),
-        slippage_bps=Decimal("2"),
+        fee_bps=Decimal(10),
+        slippage_bps=Decimal(2),
     )
 
     result = lab.run_suite(make_ticks(prices), train_fraction=Decimal("0.70"))
@@ -69,27 +69,27 @@ def test_suite_is_research_only_and_never_promotes_small_sample() -> None:
 
 def test_stressed_cost_model_is_more_expensive() -> None:
     prices = []
-    for cycle in range(40):
-        prices.extend([Decimal("100"), Decimal("99"), Decimal("100.5")])
+    for _cycle in range(40):
+        prices.extend([Decimal(100), Decimal(99), Decimal("100.5")])
     lab = StrategyResearchLab(
-        starting_quote_balance=Decimal("1000"),
+        starting_quote_balance=Decimal(1000),
         quantity=Decimal("0.1"),
-        fee_bps=Decimal("10"),
-        slippage_bps=Decimal("2"),
+        fee_bps=Decimal(10),
+        slippage_bps=Decimal(2),
     )
     candidate = StrategyCandidate(
         name="mr",
         kind="mean_reversion",
         lookback=2,
-        entry_threshold_bps=Decimal("20"),
+        entry_threshold_bps=Decimal(20),
     )
     ticks = make_ticks(prices)
     base = lab.run_candidate(ticks, candidate)
     stressed = StrategyResearchLab(
-        starting_quote_balance=Decimal("1000"),
+        starting_quote_balance=Decimal(1000),
         quantity=Decimal("0.1"),
-        fee_bps=Decimal("15"),
-        slippage_bps=Decimal("4"),
+        fee_bps=Decimal(15),
+        slippage_bps=Decimal(4),
     ).run_candidate(ticks, candidate)
 
     assert Decimal(stressed.fees_paid) >= Decimal(base.fees_paid)
