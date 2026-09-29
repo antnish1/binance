@@ -26,6 +26,8 @@ function resolveTarget(input: ControlRequest): Target | null {
       return { path: "recording/reset", method: "POST" };
     case "replay_run":
       return { path: "replay/run", method: "POST", body: payload };
+    case "research_run":
+      return { path: "research/run", method: "POST", body: payload };
     case "automation_enable":
       return { path: "automation/enable", method: "POST" };
     case "automation_disable":
