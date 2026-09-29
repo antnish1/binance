@@ -11,9 +11,9 @@ def _quote(price: str, event_time_ms: int) -> BestBidAsk:
     return BestBidAsk(
         symbol="BTCUSDT",
         bid_price=value,
-        bid_qty=Decimal("1"),
-        ask_price=value + Decimal("1"),
-        ask_qty=Decimal("1"),
+        bid_qty=Decimal(1),
+        ask_price=value + Decimal(1),
+        ask_qty=Decimal(1),
         event_time_ms=event_time_ms,
         received_time_ms=event_time_ms + 1,
     )
