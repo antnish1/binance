@@ -2,8 +2,10 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from decimal import Decimal
 
 from fastapi import FastAPI
+from pydantic import BaseModel, Field
 
 from .binance_rest import BinanceRestClient
 from .binance_ws import BinanceBookTickerStream
@@ -11,6 +13,7 @@ from .config import get_settings
 from .event_bus import EventBus, EventType
 from .market_state import MarketState
 from .portfolio import PortfolioState
+from .risk_engine import RiskEngine, RiskLimits
 from .user_data_ws import BinanceUserDataStream
 
 logger = logging.getLogger(__name__)
@@ -20,6 +23,16 @@ settings.assert_safe_startup()
 market_state = MarketState()
 event_bus = EventBus()
 portfolio_state = PortfolioState()
+risk_engine = RiskEngine(
+    RiskLimits(
+        max_order_notional=settings.risk_max_order_notional,
+        max_position_notional=settings.risk_max_position_notional,
+        max_daily_loss=settings.risk_max_daily_loss,
+        max_open_orders=settings.risk_max_open_orders,
+        max_orders_per_minute=settings.risk_max_orders_per_minute,
+        market_stale_after_ms=settings.market_stale_after_ms,
+    )
+)
 rest = BinanceRestClient(
     settings.binance_rest_base_url,
     settings.binance_api_key,
@@ -42,6 +55,13 @@ _user_stream_task: asyncio.Task | None = None
 _reconcile_task: asyncio.Task | None = None
 _rest_startup_error: str | None = None
 _reconcile_error: str | None = None
+
+
+class RiskProposal(BaseModel):
+    side: str
+    quantity: Decimal = Field(gt=0)
+    price: Decimal | None = Field(default=None, gt=0)
+    client_order_id: str | None = Field(default=None, max_length=64)
 
 
 def _credentials_configured() -> bool:
@@ -101,7 +121,7 @@ async def lifespan(_: FastAPI):
         await rest.close()
 
 
-app = FastAPI(title="Binance Fast Bot", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Binance Fast Bot", version="0.4.0", lifespan=lifespan)
 
 
 @app.get("/")
@@ -111,7 +131,7 @@ async def root() -> dict:
         "status": "online",
         "mode": "safe",
         "trading_enabled": False,
-        "phase": 5,
+        "phase": 6,
     }
 
 
@@ -137,6 +157,7 @@ async def health() -> dict:
         "last_user_stream_error": user_stream.last_error,
         "rest_startup_error": _rest_startup_error,
         "portfolio_reconcile_error": _reconcile_error,
+        "risk_kill_switch_engaged": risk_engine.status()["kill_switch_engaged"],
         "event_bus_last_sequence": event_bus.stats()["last_sequence"],
     }
 
@@ -175,6 +196,62 @@ async def portfolio() -> dict:
 async def portfolio_reconcile() -> dict:
     await _reconcile_once()
     return {"ok": True, **(await portfolio_state.snapshot())}
+
+
+@app.get("/risk/status")
+async def risk_status() -> dict:
+    return {
+        "trading_enabled": False,
+        "mode": "dry_run_only",
+        "base_asset": settings.normalized_base_asset,
+        "quote_asset": settings.normalized_quote_asset,
+        **risk_engine.status(),
+    }
+
+
+@app.post("/risk/evaluate")
+async def risk_evaluate(proposal: RiskProposal) -> dict:
+    market_snap = await market_state.snapshot()
+    market_age_ms = await market_state.age_ms()
+    if proposal.price is not None:
+        price = proposal.price
+    elif market_snap is not None:
+        price = market_snap.midpoint
+    else:
+        price = Decimal(0)
+
+    base_total = await portfolio_state.balance_total(settings.normalized_base_asset)
+    current_position_notional = base_total * price
+    open_orders_count = await portfolio_state.open_order_count()
+    decision = risk_engine.evaluate(
+        side=proposal.side,
+        quantity=proposal.quantity,
+        price=price,
+        market_age_ms=market_age_ms,
+        open_orders_count=open_orders_count,
+        current_position_notional=current_position_notional,
+        client_order_id=proposal.client_order_id,
+        consume=False,
+    )
+    event_bus.publish(
+        EventType.RISK_APPROVED if decision.approved else EventType.RISK_REJECTED,
+        {
+            "dry_run": True,
+            "side": proposal.side.upper(),
+            "quantity": str(proposal.quantity),
+            "price": str(price),
+            "reason": decision.reason.value,
+        },
+    )
+    return {
+        "dry_run": True,
+        "trading_enabled": False,
+        "symbol": settings.normalized_symbol,
+        "current_position_notional": str(current_position_notional),
+        "open_orders_count": open_orders_count,
+        "market_data_age_ms": market_age_ms,
+        **decision.as_dict(),
+    }
 
 
 @app.get("/events/stats")
