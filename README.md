@@ -2,13 +2,17 @@
 
 Cloud-first, strategy-agnostic Binance trading infrastructure.
 
-## Current scope: Phase 0–3
+## Current scope: Phase 0–4
 
 - Secure environment-based configuration
 - Binance Spot REST connectivity
 - Binance Spot live WebSocket `bookTicker` market feed
 - In-memory best bid/ask state
 - Reconnect and stale-data monitoring
+- Non-blocking in-process event bus
+- Market and connection events published from the WebSocket hot path
+- Per-subscriber bounded queues with drop accounting
+- Event telemetry endpoint
 - Health and market APIs
 - Optional authenticated read-only account check
 - Docker-ready always-on worker
@@ -21,20 +25,38 @@ Cloud-first, strategy-agnostic Binance trading infrastructure.
 
 For this phase, keep Binance trading permission and withdrawals disabled. `TRADING_ENABLED=true` is deliberately rejected at startup.
 
+## Event flow
+
+```text
+Binance WebSocket
+       ↓
+Market normalizer
+       ↓
+In-memory MarketState
+       ↓
+EventBus
+  ┌────┼───────────┐
+  ↓    ↓           ↓
+Risk  Strategy   Portfolio
+(future phases)
+```
+
+Publishing to the event bus never waits for consumers. Each subscriber gets a bounded queue; a slow consumer drops only its own events and increments telemetry instead of blocking market-data processing.
+
 ## Cloud architecture
 
 ```text
-GitHub -> CI/tests -> always-on Docker worker -> Binance WebSocket/REST
-                    \
-                     -> Vercel dashboard (later phase)
+GitHub -> CI/tests -> Railway Singapore worker -> Binance WebSocket/REST
 ```
 
-The trading engine must run as an always-on worker; Vercel is reserved for the dashboard/control plane because serverless functions are not appropriate for a persistent exchange WebSocket.
+The trading engine runs as an always-on service because a persistent exchange WebSocket is required.
 
-## Health endpoints
+## Service endpoints
 
+- `GET /`
 - `GET /health`
 - `GET /market`
+- `GET /events/stats`
 - `GET /binance/time`
 - `GET /account/check` (requires API credentials)
 
