@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     recording_path: str | None = "/tmp/binance-market.jsonl"
     replay_max_events: int = Field(default=50000, ge=100)
 
+    automation_enabled: bool = False
+    automation_quantity: Decimal = Field(default=Decimal("0.0001"), gt=0)
+    automation_threshold_bps: Decimal = Field(default=Decimal(20), gt=0)
+    automation_lookback: int = Field(default=50, ge=5, le=5000)
+    automation_cooldown_seconds: int = Field(default=30, ge=1, le=3600)
+
     trading_enabled: bool = False
 
     @property

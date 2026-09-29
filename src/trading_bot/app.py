@@ -8,6 +8,7 @@ from decimal import Decimal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from .automation import AutomationConfig, MeanReversionAutomation
 from .binance_rest import BinanceRestClient
 from .binance_ws import BinanceBookTickerStream
 from .config import get_settings
@@ -42,6 +43,17 @@ paper_executor = PaperExecutor(
     starting_quote_balance=settings.paper_starting_quote_balance,
     fee_bps=settings.paper_fee_bps,
     slippage_bps=settings.paper_slippage_bps,
+)
+automation = MeanReversionAutomation(
+    event_bus=event_bus,
+    paper_executor=paper_executor,
+    risk_engine=risk_engine,
+    config=AutomationConfig(
+        quantity=settings.automation_quantity,
+        threshold_bps=settings.automation_threshold_bps,
+        lookback=settings.automation_lookback,
+        cooldown_seconds=settings.automation_cooldown_seconds,
+    ),
 )
 market_recorder = MarketRecorder(
     event_bus=event_bus,
@@ -95,6 +107,13 @@ class ReplayRequest(BaseModel):
     speed: float = Field(default=0.0, ge=0, le=1000)
 
 
+class AutomationConfigRequest(BaseModel):
+    quantity: Decimal = Field(gt=0)
+    threshold_bps: Decimal = Field(gt=0, le=1000)
+    lookback: int = Field(ge=5, le=5000)
+    cooldown_seconds: int = Field(ge=1, le=3600)
+
+
 def _credentials_configured() -> bool:
     return bool(settings.binance_api_key and settings.binance_api_secret)
 
@@ -136,6 +155,9 @@ async def lifespan(_: FastAPI):
         logger.warning("binance_rest_startup_degraded error=%s", _rest_startup_error)
 
     await paper_executor.start()
+    await automation.start()
+    if settings.automation_enabled:
+        automation.enable()
     if settings.recording_enabled:
         await market_recorder.start()
     _stream_task = asyncio.create_task(stream.run(), name="binance-book-ticker")
@@ -145,6 +167,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        await automation.stop()
         await market_recorder.stop()
         await paper_executor.stop()
         await stream.stop()
@@ -157,17 +180,17 @@ async def lifespan(_: FastAPI):
         await rest.close()
 
 
-app = FastAPI(title="Binance Fast Bot", version="0.6.0", lifespan=lifespan)
+app = FastAPI(title="Taddy Market Automation", version="0.7.0", lifespan=lifespan)
 
 
 @app.get("/")
 async def root() -> dict:
     return {
-        "service": "Binance Fast Trading Platform",
+        "service": "Taddy Market Automation",
         "status": "online",
         "mode": "paper",
-        "trading_enabled": False,
-        "phase": 8,
+        "live_execution_enabled": False,
+        "phase": 11,
     }
 
 
@@ -180,8 +203,9 @@ async def health() -> dict:
     return {
         "status": "ok" if stream.connected and not stale and healthy_private else "degraded",
         "environment": settings.app_env,
-        "trading_enabled": False,
-        "paper_trading_enabled": True,
+        "live_execution_enabled": False,
+        "paper_execution_enabled": True,
+        "automation_enabled": automation.status()["enabled"],
         "recording_enabled": settings.recording_enabled,
         "recording_running": market_recorder.status()["running"],
         "symbol": settings.normalized_symbol,
@@ -224,7 +248,7 @@ async def market() -> dict:
 async def portfolio() -> dict:
     data = await portfolio_state.snapshot()
     return {
-        "trading_enabled": False,
+        "live_execution_enabled": False,
         "user_stream_connected": user_stream.connected,
         "reconcile_error": _reconcile_error,
         **data,
@@ -240,7 +264,7 @@ async def portfolio_reconcile() -> dict:
 @app.get("/risk/status")
 async def risk_status() -> dict:
     return {
-        "trading_enabled": False,
+        "live_execution_enabled": False,
         "mode": "paper_only",
         "base_asset": settings.normalized_base_asset,
         "quote_asset": settings.normalized_quote_asset,
@@ -284,7 +308,7 @@ async def risk_evaluate(proposal: RiskProposal) -> dict:
     )
     return {
         "dry_run": True,
-        "trading_enabled": False,
+        "live_execution_enabled": False,
         "symbol": settings.normalized_symbol,
         "current_position_notional": str(current_position_notional),
         "open_orders_count": open_orders_count,
@@ -389,6 +413,42 @@ async def paper_cancel(order_id: int) -> dict:
     return {"paper": True, "order": PaperExecutor._serialize(order)}
 
 
+@app.get("/automation/status")
+async def automation_status() -> dict:
+    return {"live_execution_enabled": False, **automation.status()}
+
+
+@app.post("/automation/enable")
+async def automation_enable() -> dict:
+    automation.enable()
+    return {"ok": True, "live_execution_enabled": False, **automation.status()}
+
+
+@app.post("/automation/disable")
+async def automation_disable() -> dict:
+    automation.disable()
+    return {"ok": True, "live_execution_enabled": False, **automation.status()}
+
+
+@app.post("/automation/reset")
+async def automation_reset() -> dict:
+    automation.reset()
+    return {"ok": True, "live_execution_enabled": False, **automation.status()}
+
+
+@app.post("/automation/config")
+async def automation_config(request: AutomationConfigRequest) -> dict:
+    automation.update_config(
+        AutomationConfig(
+            quantity=request.quantity,
+            threshold_bps=request.threshold_bps,
+            lookback=request.lookback,
+            cooldown_seconds=request.cooldown_seconds,
+        )
+    )
+    return {"ok": True, "live_execution_enabled": False, **automation.status()}
+
+
 @app.get("/recording/status")
 async def recording_status() -> dict:
     return {"enabled": settings.recording_enabled, **market_recorder.status()}
@@ -424,7 +484,7 @@ async def replay_run(request: ReplayRequest) -> dict:
         end_sequence=request.end_sequence,
     )
     result = await replay_engine.run(ticks, speed=request.speed)
-    return {"mode": "replay", "trading_enabled": False, **result}
+    return {"mode": "replay", "live_execution_enabled": False, **result}
 
 
 @app.get("/events/stats")

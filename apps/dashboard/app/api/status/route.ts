@@ -5,6 +5,7 @@ const ENDPOINTS = [
   "market",
   "paper/status",
   "risk/status",
+  "automation/status",
   "recording/status",
   "events/stats",
 ] as const;
