@@ -7,6 +7,8 @@ const ENDPOINTS = [
   "risk/status",
   "automation/status",
   "recording/status",
+  "research/latest",
+  "live-readiness",
   "events/stats",
 ] as const;
 
