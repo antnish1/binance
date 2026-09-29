@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     paper_fee_bps: Decimal = Field(default=Decimal(10), ge=0)
     paper_slippage_bps: Decimal = Field(default=Decimal(2), ge=0)
 
+    recording_enabled: bool = True
+    recording_max_events: int = Field(default=100000, ge=1000)
+    recording_path: str | None = "/tmp/binance-market.jsonl"
+    replay_max_events: int = Field(default=50000, ge=100)
+
     trading_enabled: bool = False
 
     @property
