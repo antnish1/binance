@@ -17,6 +17,7 @@ from .market_state import MarketState
 from .paper_execution import PaperExecutor
 from .portfolio import PortfolioState
 from .recording import MarketRecorder, ReplayEngine
+from .research import StrategyResearchLab
 from .risk_engine import RiskEngine, RiskLimits
 from .user_data_ws import BinanceUserDataStream
 
@@ -61,6 +62,12 @@ market_recorder = MarketRecorder(
     path=settings.recording_path if settings.recording_enabled else None,
 )
 replay_engine = ReplayEngine()
+research_lab = StrategyResearchLab(
+    starting_quote_balance=settings.paper_starting_quote_balance,
+    quantity=settings.automation_quantity,
+    fee_bps=settings.paper_fee_bps,
+    slippage_bps=settings.paper_slippage_bps,
+)
 rest = BinanceRestClient(
     settings.binance_rest_base_url,
     settings.binance_api_key,
@@ -83,6 +90,7 @@ _user_stream_task: asyncio.Task | None = None
 _reconcile_task: asyncio.Task | None = None
 _rest_startup_error: str | None = None
 _reconcile_error: str | None = None
+_latest_research: dict | None = None
 
 
 class RiskProposal(BaseModel):
@@ -112,6 +120,11 @@ class AutomationConfigRequest(BaseModel):
     threshold_bps: Decimal = Field(gt=0, le=1000)
     lookback: int = Field(ge=5, le=5000)
     cooldown_seconds: int = Field(ge=1, le=3600)
+
+
+class ResearchRequest(BaseModel):
+    max_events: int = Field(default=50000, ge=100, le=100000)
+    train_fraction: Decimal = Field(default=Decimal("0.70"), ge=Decimal("0.50"), le=Decimal("0.90"))
 
 
 def _credentials_configured() -> bool:
@@ -180,7 +193,7 @@ async def lifespan(_: FastAPI):
         await rest.close()
 
 
-app = FastAPI(title="Taddy Market Automation", version="0.7.0", lifespan=lifespan)
+app = FastAPI(title="Taddy Market Automation", version="0.8.0", lifespan=lifespan)
 
 
 @app.get("/")
@@ -190,7 +203,7 @@ async def root() -> dict:
         "status": "online",
         "mode": "paper",
         "live_execution_enabled": False,
-        "phase": 11,
+        "phase": 12,
     }
 
 
@@ -208,6 +221,7 @@ async def health() -> dict:
         "automation_enabled": automation.status()["enabled"],
         "recording_enabled": settings.recording_enabled,
         "recording_running": market_recorder.status()["running"],
+        "research_available": True,
         "symbol": settings.normalized_symbol,
         "market_stream_connected": stream.connected,
         "market_data_age_ms": age,
@@ -485,6 +499,70 @@ async def replay_run(request: ReplayRequest) -> dict:
     )
     result = await replay_engine.run(ticks, speed=request.speed)
     return {"mode": "replay", "live_execution_enabled": False, **result}
+
+
+@app.post("/research/run")
+async def research_run(request: ResearchRequest) -> dict:
+    global _latest_research
+    max_events = min(request.max_events, settings.recording_max_events)
+    ticks = market_recorder.events(limit=max_events)
+    _latest_research = research_lab.run_suite(ticks, train_fraction=request.train_fraction)
+    _latest_research["run_at_ms"] = int(time.time() * 1000)
+    return _latest_research
+
+
+@app.get("/research/latest")
+async def research_latest() -> dict:
+    if _latest_research is None:
+        return {
+            "mode": "research_only",
+            "live_execution_enabled": False,
+            "status": "not_run",
+            "recorded_events_available": market_recorder.status()["buffered_events"],
+        }
+    return _latest_research
+
+
+@app.get("/live-readiness")
+async def live_readiness() -> dict:
+    api_permissions: dict | None = None
+    api_error: str | None = None
+    if _credentials_configured():
+        try:
+            api_permissions = await rest.api_restrictions()
+        except Exception as exc:  # noqa: BLE001 - readiness must report failures, not crash
+            api_error = f"{type(exc).__name__}: {exc}"
+
+    research = _latest_research or {}
+    gates = research.get("promotion_gates", {}) if isinstance(research, dict) else {}
+    checks = {
+        "live_code_present": False,
+        "research_run_exists": _latest_research is not None,
+        "research_promotion_eligible": bool(research.get("promotion_eligible", False)),
+        "api_reading_enabled": bool(api_permissions and api_permissions.get("enableReading")),
+        "api_spot_permission_enabled": bool(
+            api_permissions and api_permissions.get("enableSpotAndMarginTrading")
+        ),
+        "api_withdrawals_disabled": bool(
+            api_permissions is not None and not api_permissions.get("enableWithdrawals")
+        ),
+        "api_ip_restricted": bool(api_permissions and api_permissions.get("ipRestrict")),
+        "risk_kill_switch_clear": not bool(risk_engine.status()["kill_switch_engaged"]),
+        "market_stream_healthy": bool(stream.connected),
+        "user_stream_healthy": bool(user_stream.connected) if _credentials_configured() else False,
+    }
+    return {
+        "mode": "readiness_only",
+        "live_execution_enabled": False,
+        "ready": False,
+        "checks": checks,
+        "research_gates": gates,
+        "api_error": api_error,
+        "blocking_reasons": [name for name, passed in checks.items() if not passed],
+        "note": (
+            "This endpoint cannot enable real-money execution. A separate reviewed implementation and explicit rollout decision are required."
+        ),
+    }
 
 
 @app.get("/events/stats")
