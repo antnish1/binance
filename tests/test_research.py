@@ -63,8 +63,24 @@ def test_suite_is_research_only_and_never_promotes_small_sample() -> None:
     assert result["mode"] == "research_only"
     assert result["live_execution_enabled"] is False
     assert result["promotion_eligible"] is False
-    assert result["promotion_gates"]["at_least_50000_ticks"] is False
-    assert result["selected_on_train"] is not None
+    assert result["promotion_gates"]["at_least_100000_samples"] is False
+    assert result["candidate_count"] > 0
+
+
+def test_flat_dataset_is_classified_no_signal() -> None:
+    lab = StrategyResearchLab(
+        starting_quote_balance=Decimal(1000),
+        quantity=Decimal("0.1"),
+        fee_bps=Decimal(10),
+        slippage_bps=Decimal(2),
+    )
+
+    result = lab.run_suite(make_ticks([Decimal(100)] * 1000))
+
+    assert result["selection_status"] == "NO_SIGNAL"
+    assert result["active_train_candidates"] == 0
+    assert result["selected_on_train"] is None
+    assert result["promotion_gates"]["train_has_activity"] is False
 
 
 def test_stressed_cost_model_is_more_expensive() -> None:

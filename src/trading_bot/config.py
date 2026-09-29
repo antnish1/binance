@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     recording_path: str | None = "/tmp/binance-market.jsonl"
     replay_max_events: int = Field(default=50000, ge=100)
 
+    research_dataset_enabled: bool = True
+    research_dataset_dir: str = "/tmp/taddy-research"
+    research_sample_interval_ms: int = Field(default=1000, ge=100, le=60000)
+    research_max_samples: int = Field(default=250000, ge=1000, le=1000000)
+
     automation_enabled: bool = False
     automation_quantity: Decimal = Field(default=Decimal("0.0001"), gt=0)
     automation_threshold_bps: Decimal = Field(default=Decimal(20), gt=0)

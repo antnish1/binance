@@ -47,11 +47,7 @@ class BacktestResult:
 
 
 class StrategyResearchLab:
-    """Deterministic research harness over recorded top-of-book data.
-
-    This class is deliberately isolated from the live event bus and from exchange
-    order clients. It only consumes immutable RecordedTick data and returns metrics.
-    """
+    """Deterministic research harness over immutable sampled market data."""
 
     def __init__(
         self,
@@ -75,8 +71,8 @@ class StrategyResearchLab:
     @staticmethod
     def default_candidates() -> list[StrategyCandidate]:
         candidates: list[StrategyCandidate] = []
-        for lookback in (50, 100):
-            for threshold in (Decimal(5), Decimal(10), Decimal(20), Decimal(30)):
+        for lookback in (20, 60, 180):
+            for threshold in (Decimal(1), Decimal(2), Decimal(3), Decimal(5), Decimal(10)):
                 candidates.append(
                     StrategyCandidate(
                         name=f"mean_reversion_l{lookback}_t{threshold}",
@@ -85,7 +81,7 @@ class StrategyResearchLab:
                         entry_threshold_bps=threshold,
                     )
                 )
-            for threshold in (Decimal(5), Decimal(10), Decimal(20)):
+            for threshold in (Decimal(1), Decimal(2), Decimal(3), Decimal(5)):
                 candidates.append(
                     StrategyCandidate(
                         name=f"momentum_l{lookback}_t{threshold}",
@@ -108,7 +104,7 @@ class StrategyResearchLab:
         if not (Decimal("0.50") <= train_fraction <= Decimal("0.90")):
             raise ValueError("train_fraction must be between 0.50 and 0.90")
 
-        ordered = sorted(ticks, key=lambda tick: tick.sequence)
+        ordered = sorted(ticks, key=lambda tick: tick.event_time_ms)
         split = int(Decimal(len(ordered)) * train_fraction)
         split = min(max(split, 1), len(ordered) - 1) if len(ordered) > 1 else 1
         train = ordered[:split]
@@ -116,12 +112,21 @@ class StrategyResearchLab:
         suite = candidates or self.default_candidates()
 
         train_results = [self.run_candidate(train, candidate) for candidate in suite]
-        selected = self._select_candidate(train_results)
-        selected_candidate = next((item for item in suite if item.name == selected.name), suite[0])
+        active_train = [item for item in train_results if item.round_trips > 0]
+        selected = self._select_candidate(active_train) if active_train else None
+        selected_candidate = (
+            next((item for item in suite if selected and item.name == selected.name), None)
+            if selected
+            else None
+        )
         holdout_results = [self.run_candidate(holdout, candidate) for candidate in suite] if holdout else []
-        selected_holdout = next(
-            (item for item in holdout_results if item.name == selected_candidate.name),
-            None,
+        selected_holdout = (
+            next(
+                (item for item in holdout_results if item.name == selected_candidate.name),
+                None,
+            )
+            if selected_candidate
+            else None
         )
 
         stressed_lab = StrategyResearchLab(
@@ -131,13 +136,16 @@ class StrategyResearchLab:
             slippage_bps=self.slippage_bps * Decimal(2),
         )
         stressed_holdout = (
-            stressed_lab.run_candidate(holdout, selected_candidate) if holdout else None
+            stressed_lab.run_candidate(holdout, selected_candidate)
+            if holdout and selected_candidate
+            else None
         )
 
         source_duration_ms = max(0, ordered[-1].event_time_ms - ordered[0].event_time_ms)
         gates = self._promotion_gates(
             total_ticks=len(ordered),
             source_duration_ms=source_duration_ms,
+            train_has_activity=bool(active_train),
             holdout=selected_holdout,
             stressed=stressed_holdout,
         )
@@ -149,6 +157,9 @@ class StrategyResearchLab:
             "train_fraction": str(train_fraction),
             "train_ticks": len(train),
             "holdout_ticks": len(holdout),
+            "candidate_count": len(suite),
+            "active_train_candidates": len(active_train),
+            "selection_status": "ACTIVE_CANDIDATE" if selected else "NO_SIGNAL",
             "cost_model": {
                 "fee_bps_per_side": str(self.fee_bps),
                 "slippage_bps_per_side": str(self.slippage_bps),
@@ -157,7 +168,7 @@ class StrategyResearchLab:
             },
             "train_results": [item.as_dict() for item in train_results],
             "holdout_results": [item.as_dict() for item in holdout_results],
-            "selected_on_train": selected.as_dict(),
+            "selected_on_train": None if selected is None else selected.as_dict(),
             "selected_holdout": None if selected_holdout is None else selected_holdout.as_dict(),
             "stressed_selected_holdout": (
                 None if stressed_holdout is None else stressed_holdout.as_dict()
@@ -375,13 +386,15 @@ class StrategyResearchLab:
         *,
         total_ticks: int,
         source_duration_ms: int,
+        train_has_activity: bool,
         holdout: BacktestResult | None,
         stressed: BacktestResult | None,
     ) -> dict[str, bool]:
         return {
-            "at_least_50000_ticks": total_ticks >= 50_000,
-            "at_least_6_hours_source_data": source_duration_ms >= 6 * 60 * 60 * 1000,
-            "holdout_has_20_round_trips": bool(holdout and holdout.round_trips >= 20),
+            "at_least_100000_samples": total_ticks >= 100_000,
+            "at_least_48_hours_source_data": source_duration_ms >= 48 * 60 * 60 * 1000,
+            "train_has_activity": train_has_activity,
+            "holdout_has_30_round_trips": bool(holdout and holdout.round_trips >= 30),
             "holdout_net_positive": bool(holdout and Decimal(holdout.net_pnl) > 0),
             "holdout_drawdown_below_2pct": bool(
                 holdout and Decimal(holdout.max_drawdown_pct) <= Decimal(2)
@@ -395,21 +408,25 @@ class StrategyResearchLab:
             "live_execution_enabled": False,
             "ticks": 0,
             "source_duration_ms": 0,
+            "candidate_count": 0,
+            "active_train_candidates": 0,
+            "selection_status": "NO_DATA",
             "train_results": [],
             "holdout_results": [],
             "selected_on_train": None,
             "selected_holdout": None,
             "stressed_selected_holdout": None,
             "promotion_gates": {
-                "at_least_50000_ticks": False,
-                "at_least_6_hours_source_data": False,
-                "holdout_has_20_round_trips": False,
+                "at_least_100000_samples": False,
+                "at_least_48_hours_source_data": False,
+                "train_has_activity": False,
+                "holdout_has_30_round_trips": False,
                 "holdout_net_positive": False,
                 "holdout_drawdown_below_2pct": False,
                 "stressed_costs_net_positive": False,
             },
             "promotion_eligible": False,
-            "note": "No recorded data is available yet.",
+            "note": "No persistent research data is available yet.",
         }
 
     def _empty_result(self, candidate: StrategyCandidate) -> BacktestResult:
