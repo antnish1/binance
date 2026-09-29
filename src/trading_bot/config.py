@@ -1,3 +1,4 @@
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import Field
@@ -13,6 +14,8 @@ class Settings(BaseSettings):
     port: int = 8000
 
     binance_symbol: str = "BTCUSDT"
+    binance_base_asset: str = "BTC"
+    binance_quote_asset: str = "USDT"
     market_stale_after_ms: int = Field(default=5000, ge=100)
     portfolio_reconcile_seconds: int = Field(default=60, ge=10)
 
@@ -22,11 +25,25 @@ class Settings(BaseSettings):
     binance_api_key: str | None = None
     binance_api_secret: str | None = None
 
+    risk_max_order_notional: Decimal = Field(default=Decimal(25), gt=0)
+    risk_max_position_notional: Decimal = Field(default=Decimal(100), gt=0)
+    risk_max_daily_loss: Decimal = Field(default=Decimal(10), gt=0)
+    risk_max_open_orders: int = Field(default=3, ge=1)
+    risk_max_orders_per_minute: int = Field(default=10, ge=1)
+
     trading_enabled: bool = False
 
     @property
     def normalized_symbol(self) -> str:
         return self.binance_symbol.upper().strip()
+
+    @property
+    def normalized_base_asset(self) -> str:
+        return self.binance_base_asset.upper().strip()
+
+    @property
+    def normalized_quote_asset(self) -> str:
+        return self.binance_quote_asset.upper().strip()
 
     def assert_safe_startup(self) -> None:
         if self.trading_enabled:

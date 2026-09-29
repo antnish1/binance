@@ -105,6 +105,15 @@ class PortfolioState:
                 )
             self.last_order_update_ms = event_time
 
+    async def balance_total(self, asset: str) -> Decimal:
+        async with self._lock:
+            balance = self._balances.get(asset.upper())
+            return Decimal(0) if balance is None else balance.total
+
+    async def open_order_count(self) -> int:
+        async with self._lock:
+            return len(self._orders)
+
     async def snapshot(self) -> dict:
         async with self._lock:
             balances = [
