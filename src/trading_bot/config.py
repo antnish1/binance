@@ -14,9 +14,11 @@ class Settings(BaseSettings):
 
     binance_symbol: str = "BTCUSDT"
     market_stale_after_ms: int = Field(default=5000, ge=100)
+    portfolio_reconcile_seconds: int = Field(default=60, ge=10)
 
     binance_rest_base_url: str = "https://api.binance.com"
     binance_ws_base_url: str = "wss://stream.binance.com:9443/ws"
+    binance_ws_api_url: str = "wss://ws-api.binance.com:443/ws-api/v3"
     binance_api_key: str | None = None
     binance_api_secret: str | None = None
 
