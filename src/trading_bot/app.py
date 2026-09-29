@@ -15,6 +15,7 @@ from .event_bus import EventBus, EventType
 from .market_state import MarketState
 from .paper_execution import PaperExecutor
 from .portfolio import PortfolioState
+from .recording import MarketRecorder, ReplayEngine
 from .risk_engine import RiskEngine, RiskLimits
 from .user_data_ws import BinanceUserDataStream
 
@@ -42,6 +43,12 @@ paper_executor = PaperExecutor(
     fee_bps=settings.paper_fee_bps,
     slippage_bps=settings.paper_slippage_bps,
 )
+market_recorder = MarketRecorder(
+    event_bus=event_bus,
+    max_events=settings.recording_max_events,
+    path=settings.recording_path if settings.recording_enabled else None,
+)
+replay_engine = ReplayEngine()
 rest = BinanceRestClient(
     settings.binance_rest_base_url,
     settings.binance_api_key,
@@ -79,6 +86,13 @@ class PaperOrderProposal(BaseModel):
     quantity: Decimal = Field(gt=0)
     limit_price: Decimal | None = Field(default=None, gt=0)
     client_order_id: str | None = Field(default=None, max_length=64)
+
+
+class ReplayRequest(BaseModel):
+    start_sequence: int | None = Field(default=None, ge=1)
+    end_sequence: int | None = Field(default=None, ge=1)
+    max_events: int = Field(default=10000, ge=1)
+    speed: float = Field(default=0.0, ge=0, le=1000)
 
 
 def _credentials_configured() -> bool:
@@ -122,6 +136,8 @@ async def lifespan(_: FastAPI):
         logger.warning("binance_rest_startup_degraded error=%s", _rest_startup_error)
 
     await paper_executor.start()
+    if settings.recording_enabled:
+        await market_recorder.start()
     _stream_task = asyncio.create_task(stream.run(), name="binance-book-ticker")
     if _credentials_configured():
         _user_stream_task = asyncio.create_task(user_stream.run(), name="binance-user-data")
@@ -129,6 +145,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        await market_recorder.stop()
         await paper_executor.stop()
         await stream.stop()
         await user_stream.stop()
@@ -140,7 +157,7 @@ async def lifespan(_: FastAPI):
         await rest.close()
 
 
-app = FastAPI(title="Binance Fast Bot", version="0.5.0", lifespan=lifespan)
+app = FastAPI(title="Binance Fast Bot", version="0.6.0", lifespan=lifespan)
 
 
 @app.get("/")
@@ -150,7 +167,7 @@ async def root() -> dict:
         "status": "online",
         "mode": "paper",
         "trading_enabled": False,
-        "phase": 7,
+        "phase": 8,
     }
 
 
@@ -165,6 +182,8 @@ async def health() -> dict:
         "environment": settings.app_env,
         "trading_enabled": False,
         "paper_trading_enabled": True,
+        "recording_enabled": settings.recording_enabled,
+        "recording_running": market_recorder.status()["running"],
         "symbol": settings.normalized_symbol,
         "market_stream_connected": stream.connected,
         "market_data_age_ms": age,
@@ -368,6 +387,44 @@ async def paper_cancel(order_id: int) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"paper": True, "order": PaperExecutor._serialize(order)}
+
+
+@app.get("/recording/status")
+async def recording_status() -> dict:
+    return {"enabled": settings.recording_enabled, **market_recorder.status()}
+
+
+@app.get("/recording/events")
+async def recording_events(
+    limit: int = 1000,
+    start_sequence: int | None = None,
+    end_sequence: int | None = None,
+) -> dict:
+    limit = max(1, min(limit, settings.replay_max_events))
+    ticks = market_recorder.events(
+        limit=limit,
+        start_sequence=start_sequence,
+        end_sequence=end_sequence,
+    )
+    return {"count": len(ticks), "events": [tick.as_dict() for tick in ticks]}
+
+
+@app.post("/recording/reset")
+async def recording_reset() -> dict:
+    await market_recorder.clear()
+    return {"ok": True, **market_recorder.status()}
+
+
+@app.post("/replay/run")
+async def replay_run(request: ReplayRequest) -> dict:
+    max_events = min(request.max_events, settings.replay_max_events)
+    ticks = market_recorder.events(
+        limit=max_events,
+        start_sequence=request.start_sequence,
+        end_sequence=request.end_sequence,
+    )
+    result = await replay_engine.run(ticks, speed=request.speed)
+    return {"mode": "replay", "trading_enabled": False, **result}
 
 
 @app.get("/events/stats")
