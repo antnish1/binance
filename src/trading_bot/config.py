@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     risk_max_open_orders: int = Field(default=3, ge=1)
     risk_max_orders_per_minute: int = Field(default=10, ge=1)
 
+    paper_starting_quote_balance: Decimal = Field(default=Decimal(1000), gt=0)
+    paper_fee_bps: Decimal = Field(default=Decimal(10), ge=0)
+    paper_slippage_bps: Decimal = Field(default=Decimal(2), ge=0)
+
     trading_enabled: bool = False
 
     @property
@@ -48,7 +52,7 @@ class Settings(BaseSettings):
     def assert_safe_startup(self) -> None:
         if self.trading_enabled:
             raise RuntimeError(
-                "TRADING_ENABLED=true is blocked in this phase. Order execution has not been enabled."
+                "TRADING_ENABLED=true is blocked in this phase. Live order execution is not enabled."
             )
 
 
