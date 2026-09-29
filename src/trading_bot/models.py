@@ -18,4 +18,4 @@ class BestBidAsk:
 
     @property
     def midpoint(self) -> Decimal:
-        return (self.ask_price + self.bid_price) / Decimal("2")
+        return (self.ask_price + self.bid_price) / Decimal(2)
