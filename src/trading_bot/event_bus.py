@@ -17,6 +17,11 @@ class EventType(StrEnum):
     ORDER_PARTIALLY_FILLED = "order_partially_filled"
     ORDER_FILLED = "order_filled"
     ORDER_CANCELLED = "order_cancelled"
+    ACCOUNT_UPDATED = "account_updated"
+    BALANCE_UPDATED = "balance_updated"
+    PORTFOLIO_RECONCILED = "portfolio_reconciled"
+    USER_STREAM_CONNECTED = "user_stream_connected"
+    USER_STREAM_DISCONNECTED = "user_stream_disconnected"
     CONNECTION_LOST = "connection_lost"
     CONNECTION_RESTORED = "connection_restored"
 
@@ -31,13 +36,7 @@ class Event:
 
 
 class EventBus:
-    """In-process, non-blocking pub/sub bus for the trading hot path.
-
-    Publishing never waits for consumers. Each subscriber receives its own bounded
-    asyncio queue. If a consumer falls behind and its queue is full, the event is
-    dropped for that consumer and recorded in bus statistics rather than blocking
-    market-data processing.
-    """
+    """In-process, non-blocking pub/sub bus for the trading hot path."""
 
     def __init__(self) -> None:
         self._sequence = 0
@@ -70,13 +69,11 @@ class EventBus:
             payload=payload,
         )
         self._published[event_type] += 1
-
         for queue in tuple(self._subscribers.get(event_type, ())):
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
                 self._dropped[event_type] += 1
-
         return event
 
     def stats(self) -> dict[str, Any]:

@@ -25,18 +25,41 @@ class BinanceRestClient:
         response.raise_for_status()
         return int(response.json()["serverTime"])
 
-    async def account(self) -> dict:
+    def signed_params(self, extra: dict | None = None) -> tuple[str, dict[str, str]]:
         if not self.api_key or not self.api_secret:
             raise RuntimeError("BINANCE_API_KEY and BINANCE_API_SECRET are required")
-
         params = {"timestamp": int(time.time() * 1000), "recvWindow": 5000}
+        if extra:
+            params.update(extra)
         query = urlencode(params)
         signature = hmac.new(
             self.api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256
         ).hexdigest()
-        headers = {"X-MBX-APIKEY": self.api_key}
-        response = await self._client.get(
-            f"/api/v3/account?{query}&signature={signature}", headers=headers
-        )
+        return f"{query}&signature={signature}", {"X-MBX-APIKEY": self.api_key}
+
+    def websocket_signature(self, params: dict) -> str:
+        if not self.api_secret:
+            raise RuntimeError("BINANCE_API_SECRET is required")
+        payload = "&".join(f"{key}={params[key]}" for key in sorted(params))
+        return hmac.new(
+            self.api_secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+
+    async def account(self) -> dict:
+        query, headers = self.signed_params()
+        response = await self._client.get(f"/api/v3/account?{query}", headers=headers)
+        response.raise_for_status()
+        return response.json()
+
+    async def open_orders(self, symbol: str | None = None) -> list[dict]:
+        extra = {"symbol": symbol} if symbol else None
+        query, headers = self.signed_params(extra)
+        response = await self._client.get(f"/api/v3/openOrders?{query}", headers=headers)
+        response.raise_for_status()
+        return list(response.json())
+
+    async def api_restrictions(self) -> dict:
+        query, headers = self.signed_params()
+        response = await self._client.get(f"/sapi/v1/account/apiRestrictions?{query}", headers=headers)
         response.raise_for_status()
         return response.json()

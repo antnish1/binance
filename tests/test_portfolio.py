@@ -1,5 +1,4 @@
 import asyncio
-from decimal import Decimal
 
 from trading_bot.portfolio import PortfolioState
 
@@ -45,7 +44,7 @@ def test_portfolio_reconcile_and_user_events() -> None:
             }
         )
         snap = await state.snapshot()
-        assert snap["balances"][0]["total"] == str(Decimal("12"))
+        assert snap["balances"][0]["total"] == "12"
         assert snap["open_orders"][0]["status"] == "PARTIALLY_FILLED"
         assert snap["open_orders"][0]["executed_qty"] == "0.04"
         await state.apply_execution_report(
