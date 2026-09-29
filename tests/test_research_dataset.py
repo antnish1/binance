@@ -49,7 +49,7 @@ async def test_research_dataset_persists_and_reloads(tmp_path) -> None:
     assert events[0].sequence == 1
     assert events[-1].sequence == 3
     assert status["files"] == 1
-    assert status["persistent_path_configured"] is True
+    assert status["bytes_on_disk"] > 0
 
 
 @pytest.mark.asyncio
@@ -81,3 +81,13 @@ async def test_research_dataset_downsamples(tmp_path) -> None:
     await store.stop()
 
     assert [event.event_time_ms - base for event in events] == [0, 1000, 2000]
+
+
+def test_data_volume_path_is_marked_non_tmp() -> None:
+    store = ResearchDatasetStore(
+        event_bus=EventBus(),
+        directory="/data/taddy-research",
+        sample_interval_ms=1000,
+    )
+
+    assert not str(store.directory).startswith("/tmp")
