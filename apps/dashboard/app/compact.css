@@ -1,0 +1,180 @@
+/* Desktop density pass: make Taddy feel like an operational console at 100% browser zoom. */
+@media (min-width: 1180px) {
+  .app-frame {
+    grid-template-columns: 176px minmax(0, 1fr);
+  }
+
+  .sidebar {
+    padding: 14px 10px 12px;
+    gap: 14px;
+  }
+
+  .brand-mark {
+    gap: 8px;
+    padding: 0 3px;
+  }
+
+  .brand-bear {
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    font-size: 14px;
+  }
+
+  .brand-mark b { font-size: 16px; }
+  .brand-mark small { font-size: 7px; }
+  .sidebar nav { gap: 2px; }
+  .nav-item {
+    gap: 7px;
+    padding: 8px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+  }
+  .nav-item span { width: 17px; font-size: 13px; }
+
+  .sidebar-mascot { padding-top: 4px; }
+  .sidebar-mascot .taddy-bear { width: 104px; }
+  .sidebar-mascot p { font-size: 9px; line-height: 1.35; }
+  .version { font-size: 8px; padding: 2px 3px; }
+
+  .main-area {
+    width: 100%;
+    padding: 10px 12px 16px;
+  }
+
+  .topbar {
+    min-height: 32px;
+    margin-bottom: 7px;
+    gap: 10px;
+  }
+  .crumb { font-size: 8px; }
+  .top-actions { gap: 6px; }
+  .status, .tag { padding: 5px 8px; font-size: 8px; }
+  .refresh, .secondary, .primary, .danger-button { padding: 7px 9px; border-radius: 8px; font-size: 10px; }
+
+  .hero-card {
+    grid-template-columns: minmax(0, 1.55fr) minmax(190px, .52fr) minmax(190px, .48fr);
+    gap: 10px;
+    min-height: 158px;
+    border-radius: 13px;
+    margin-bottom: 8px;
+  }
+  .hero-copy { padding: 16px 18px; }
+  .phase-chip { font-size: 8px; }
+  h1 {
+    font-size: clamp(34px, 3vw, 48px);
+    line-height: .96;
+    margin: 5px 0 7px;
+    white-space: nowrap;
+  }
+  .hero-copy p {
+    max-width: 760px;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .hero-badges { gap: 5px; margin-top: 9px; }
+  .hero-badges span { padding: 4px 7px; font-size: 8px; }
+  .hero-illustration { min-height: 158px; }
+  .hero-illustration .taddy-bear {
+    width: min(225px, 100%);
+    max-height: 170px;
+  }
+  .mode-stack { gap: 6px; padding: 10px; }
+  .mode-stack > div { border-radius: 9px; padding: 9px 10px; gap: 2px; }
+  .mode-stack small, .mode-stack span { font-size: 8px; }
+  .mode-stack b { font-size: 13px; }
+
+  .notice { margin-bottom: 8px; padding: 7px 9px; font-size: 10px; }
+
+  .kpi-grid {
+    margin-bottom: 8px;
+    border-radius: 10px;
+  }
+  .kpi {
+    min-height: 70px;
+    padding: 9px 10px;
+  }
+  .kpi span, .mini-grid span { font-size: 9px; }
+  .kpi strong { font-size: 16px; }
+  .kpi small { font-size: 8px; }
+
+  .primary-grid {
+    grid-template-columns: .82fr 1.15fr .98fr;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .two-col, .two-col.equal {
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .systems-grid { gap: 8px; }
+
+  .panel {
+    padding: 11px;
+    border-radius: 10px;
+  }
+  .panel.compact { min-height: 176px; }
+  .panel-head { gap: 8px; margin-bottom: 10px; }
+  .label { font-size: 8px; margin-bottom: 3px; }
+  h2 { font-size: 15px; }
+
+  .control-form { gap: 7px; }
+  .control-form label, .inline-fields label, .auto-fields label { gap: 3px; font-size: 9px; }
+  .field-row, .inline-fields { gap: 6px; }
+  input, select { padding: 7px 8px; border-radius: 7px; font-size: 10px; }
+  .segmented button { padding: 7px; font-size: 10px; }
+  .ticket-summary { padding: 7px 8px; font-size: 9px; }
+  .button-row { gap: 6px; }
+  .button-row.triple { gap: 6px; }
+  .risk-result { margin-top: 7px; padding: 7px 8px; font-size: 9px; }
+  .full { margin-top: 8px; }
+
+  .chart-wrap {
+    min-height: 138px;
+    padding: 7px;
+  }
+  .chart-wrap svg { height: 112px; }
+  .chart-empty { min-height: 138px; }
+  .mini-grid.four { margin-top: 7px; }
+  .mini-grid > div { padding: 7px 8px; }
+  .mini-grid b { font-size: 10px; }
+
+  .automation-intro {
+    grid-template-columns: 54px 1fr;
+    gap: 7px;
+  }
+  .automation-intro .taddy-bear { width: 52px; }
+  .automation-intro p { font-size: 9px; line-height: 1.35; }
+  .auto-fields { gap: 6px; }
+
+  dl > div { padding: 7px 0; }
+  dt, dd { font-size: 10px; }
+
+  th, td { padding: 7px 8px; font-size: 10px; }
+  .empty-cell { padding: 15px; }
+  .tiny { padding: 4px 6px; font-size: 9px; }
+
+  footer { padding-top: 10px; font-size: 9px; }
+}
+
+/* Large desktop: use the extra horizontal space instead of scaling components up. */
+@media (min-width: 1600px) {
+  .app-frame { grid-template-columns: 164px minmax(0, 1fr); }
+  .main-area { padding-left: 10px; padding-right: 10px; }
+  .primary-grid { grid-template-columns: .76fr 1.14fr 1.1fr; }
+  .hero-card { grid-template-columns: minmax(0, 1.7fr) minmax(210px, .48fr) minmax(195px, .42fr); }
+}
+
+/* Short desktop screens: keep the console above the fold as much as possible. */
+@media (min-width: 1180px) and (max-height: 850px) {
+  .sidebar-mascot .taddy-bear { width: 78px; }
+  .sidebar-mascot p { display: none; }
+  .hero-card { min-height: 142px; }
+  .hero-illustration { min-height: 142px; }
+  .hero-illustration .taddy-bear { max-height: 150px; }
+  .hero-copy { padding-top: 12px; padding-bottom: 12px; }
+  .kpi { min-height: 64px; }
+  .panel { padding: 9px; }
+  .chart-wrap { min-height: 120px; }
+  .chart-wrap svg { height: 96px; }
+}
