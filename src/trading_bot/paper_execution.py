@@ -111,9 +111,7 @@ class PaperExecutor:
             self._next_order_id += 1
             self._orders[order.order_id] = order
             self.event_bus.publish(EventType.ORDER_SUBMITTED, self._event_payload(order))
-            if order_type == "MARKET":
-                await self._fill_locked(order, quote)
-            elif self._limit_marketable(order, quote):
+            if order_type == "MARKET" or self._limit_marketable(order, quote):
                 await self._fill_locked(order, quote)
             else:
                 self._open_order_ids.add(order.order_id)
@@ -153,10 +151,13 @@ class PaperExecutor:
             fee = notional * self.fee_bps / Decimal(10_000)
             if notional + fee > self._quote_balance:
                 order.status = "REJECTED"
-                self.event_bus.publish(EventType.RISK_REJECTED, {
-                    **self._event_payload(order),
-                    "reason": "insufficient_paper_quote_balance",
-                })
+                self.event_bus.publish(
+                    EventType.RISK_REJECTED,
+                    {
+                        **self._event_payload(order),
+                        "reason": "insufficient_paper_quote_balance",
+                    },
+                )
                 return
             self._quote_balance -= notional + fee
             self._base_balance += order.quantity
@@ -164,10 +165,13 @@ class PaperExecutor:
         else:
             if order.quantity > self._base_balance:
                 order.status = "REJECTED"
-                self.event_bus.publish(EventType.RISK_REJECTED, {
-                    **self._event_payload(order),
-                    "reason": "insufficient_paper_base_balance",
-                })
+                self.event_bus.publish(
+                    EventType.RISK_REJECTED,
+                    {
+                        **self._event_payload(order),
+                        "reason": "insufficient_paper_base_balance",
+                    },
+                )
                 return
             raw_price = quote.bid_price
             fill_price = raw_price * (Decimal(1) - self.slippage_bps / Decimal(10_000))
