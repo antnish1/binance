@@ -1,3 +1,4 @@
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import Field
@@ -21,6 +22,12 @@ class Settings(BaseSettings):
     binance_ws_api_url: str = "wss://ws-api.binance.com:443/ws-api/v3"
     binance_api_key: str | None = None
     binance_api_secret: str | None = None
+
+    risk_max_order_notional: Decimal = Field(default=Decimal(25), gt=0)
+    risk_max_position_notional: Decimal = Field(default=Decimal(100), gt=0)
+    risk_max_daily_loss: Decimal = Field(default=Decimal(10), gt=0)
+    risk_max_open_orders: int = Field(default=3, ge=1)
+    risk_max_orders_per_minute: int = Field(default=10, ge=1)
 
     trading_enabled: bool = False
 
