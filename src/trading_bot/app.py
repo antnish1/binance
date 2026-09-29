@@ -18,6 +18,7 @@ from .paper_execution import PaperExecutor
 from .portfolio import PortfolioState
 from .recording import MarketRecorder, ReplayEngine
 from .research import StrategyResearchLab
+from .research_dataset import ResearchDatasetStore
 from .risk_engine import RiskEngine, RiskLimits
 from .user_data_ws import BinanceUserDataStream
 
@@ -60,6 +61,11 @@ market_recorder = MarketRecorder(
     event_bus=event_bus,
     max_events=settings.recording_max_events,
     path=settings.recording_path if settings.recording_enabled else None,
+)
+research_dataset = ResearchDatasetStore(
+    event_bus=event_bus,
+    directory=settings.research_dataset_dir,
+    sample_interval_ms=settings.research_sample_interval_ms,
 )
 replay_engine = ReplayEngine()
 research_lab = StrategyResearchLab(
@@ -123,7 +129,7 @@ class AutomationConfigRequest(BaseModel):
 
 
 class ResearchRequest(BaseModel):
-    max_events: int = Field(default=50000, ge=100, le=100000)
+    max_events: int = Field(default=100000, ge=100, le=500000)
     train_fraction: Decimal = Field(default=Decimal("0.70"), ge=Decimal("0.50"), le=Decimal("0.90"))
 
 
@@ -173,6 +179,8 @@ async def lifespan(_: FastAPI):
         automation.enable()
     if settings.recording_enabled:
         await market_recorder.start()
+    if settings.research_dataset_enabled:
+        await research_dataset.start()
     _stream_task = asyncio.create_task(stream.run(), name="binance-book-ticker")
     if _credentials_configured():
         _user_stream_task = asyncio.create_task(user_stream.run(), name="binance-user-data")
@@ -181,6 +189,8 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         await automation.stop()
+        if settings.research_dataset_enabled:
+            await research_dataset.stop()
         await market_recorder.stop()
         await paper_executor.stop()
         await stream.stop()
@@ -193,7 +203,7 @@ async def lifespan(_: FastAPI):
         await rest.close()
 
 
-app = FastAPI(title="Taddy Market Automation", version="0.8.0", lifespan=lifespan)
+app = FastAPI(title="Taddy Market Automation", version="0.9.0", lifespan=lifespan)
 
 
 @app.get("/")
@@ -203,7 +213,7 @@ async def root() -> dict:
         "status": "online",
         "mode": "paper",
         "live_execution_enabled": False,
-        "phase": 12,
+        "phase": 13,
     }
 
 
@@ -213,6 +223,7 @@ async def health() -> dict:
     stale = age is None or age > settings.market_stale_after_ms
     user_stream_expected = _credentials_configured()
     healthy_private = not user_stream_expected or user_stream.connected
+    dataset_status = await research_dataset.status() if settings.research_dataset_enabled else {}
     return {
         "status": "ok" if stream.connected and not stale and healthy_private else "degraded",
         "environment": settings.app_env,
@@ -222,6 +233,8 @@ async def health() -> dict:
         "recording_enabled": settings.recording_enabled,
         "recording_running": market_recorder.status()["running"],
         "research_available": True,
+        "research_dataset_running": bool(dataset_status.get("running", False)),
+        "research_dataset_persistent": bool(dataset_status.get("persistent_path_configured", False)),
         "symbol": settings.normalized_symbol,
         "market_stream_connected": stream.connected,
         "market_data_age_ms": age,
@@ -501,23 +514,40 @@ async def replay_run(request: ReplayRequest) -> dict:
     return {"mode": "replay", "live_execution_enabled": False, **result}
 
 
+@app.get("/research/dataset/status")
+async def research_dataset_status() -> dict:
+    return {
+        "enabled": settings.research_dataset_enabled,
+        **(await research_dataset.status()),
+    }
+
+
 @app.post("/research/run")
 async def research_run(request: ResearchRequest) -> dict:
     global _latest_research
-    max_events = min(request.max_events, settings.recording_max_events)
-    ticks = market_recorder.events(limit=max_events)
+    max_events = min(request.max_events, settings.research_max_samples)
+    if settings.research_dataset_enabled:
+        ticks = await research_dataset.events(limit=max_events)
+        source = "persistent_sampled_dataset"
+    else:
+        ticks = market_recorder.events(limit=min(max_events, settings.recording_max_events))
+        source = "volatile_recorder_buffer"
     _latest_research = research_lab.run_suite(ticks, train_fraction=request.train_fraction)
     _latest_research["run_at_ms"] = int(time.time() * 1000)
+    _latest_research["dataset_source"] = source
+    _latest_research["dataset_status"] = await research_dataset.status()
     return _latest_research
 
 
 @app.get("/research/latest")
 async def research_latest() -> dict:
     if _latest_research is None:
+        dataset_status = await research_dataset.status()
         return {
             "mode": "research_only",
             "live_execution_enabled": False,
             "status": "not_run",
+            "dataset_status": dataset_status,
             "recorded_events_available": market_recorder.status()["buffered_events"],
         }
     return _latest_research
@@ -535,8 +565,10 @@ async def live_readiness() -> dict:
 
     research = _latest_research or {}
     gates = research.get("promotion_gates", {}) if isinstance(research, dict) else {}
+    dataset_status = await research_dataset.status()
     checks = {
         "live_code_present": False,
+        "research_dataset_persistent": bool(dataset_status.get("persistent_path_configured")),
         "research_run_exists": _latest_research is not None,
         "research_promotion_eligible": bool(research.get("promotion_eligible", False)),
         "api_reading_enabled": bool(api_permissions and api_permissions.get("enableReading")),
@@ -557,6 +589,7 @@ async def live_readiness() -> dict:
         "ready": False,
         "checks": checks,
         "research_gates": gates,
+        "dataset_status": dataset_status,
         "api_error": api_error,
         "blocking_reasons": [name for name, passed in checks.items() if not passed],
         "note": (
