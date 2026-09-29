@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from decimal import Decimal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .binance_rest import BinanceRestClient
@@ -12,6 +13,7 @@ from .binance_ws import BinanceBookTickerStream
 from .config import get_settings
 from .event_bus import EventBus, EventType
 from .market_state import MarketState
+from .paper_execution import PaperExecutor
 from .portfolio import PortfolioState
 from .risk_engine import RiskEngine, RiskLimits
 from .user_data_ws import BinanceUserDataStream
@@ -32,6 +34,13 @@ risk_engine = RiskEngine(
         max_orders_per_minute=settings.risk_max_orders_per_minute,
         market_stale_after_ms=settings.market_stale_after_ms,
     )
+)
+paper_executor = PaperExecutor(
+    event_bus=event_bus,
+    symbol=settings.normalized_symbol,
+    starting_quote_balance=settings.paper_starting_quote_balance,
+    fee_bps=settings.paper_fee_bps,
+    slippage_bps=settings.paper_slippage_bps,
 )
 rest = BinanceRestClient(
     settings.binance_rest_base_url,
@@ -61,6 +70,14 @@ class RiskProposal(BaseModel):
     side: str
     quantity: Decimal = Field(gt=0)
     price: Decimal | None = Field(default=None, gt=0)
+    client_order_id: str | None = Field(default=None, max_length=64)
+
+
+class PaperOrderProposal(BaseModel):
+    side: str
+    order_type: str = "MARKET"
+    quantity: Decimal = Field(gt=0)
+    limit_price: Decimal | None = Field(default=None, gt=0)
     client_order_id: str | None = Field(default=None, max_length=64)
 
 
@@ -104,6 +121,7 @@ async def lifespan(_: FastAPI):
         _rest_startup_error = f"{type(exc).__name__}: {exc}"
         logger.warning("binance_rest_startup_degraded error=%s", _rest_startup_error)
 
+    await paper_executor.start()
     _stream_task = asyncio.create_task(stream.run(), name="binance-book-ticker")
     if _credentials_configured():
         _user_stream_task = asyncio.create_task(user_stream.run(), name="binance-user-data")
@@ -111,6 +129,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        await paper_executor.stop()
         await stream.stop()
         await user_stream.stop()
         tasks = [task for task in (_stream_task, _user_stream_task, _reconcile_task) if task]
@@ -121,7 +140,7 @@ async def lifespan(_: FastAPI):
         await rest.close()
 
 
-app = FastAPI(title="Binance Fast Bot", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="Binance Fast Bot", version="0.5.0", lifespan=lifespan)
 
 
 @app.get("/")
@@ -129,9 +148,9 @@ async def root() -> dict:
     return {
         "service": "Binance Fast Trading Platform",
         "status": "online",
-        "mode": "safe",
+        "mode": "paper",
         "trading_enabled": False,
-        "phase": 6,
+        "phase": 7,
     }
 
 
@@ -145,6 +164,7 @@ async def health() -> dict:
         "status": "ok" if stream.connected and not stale and healthy_private else "degraded",
         "environment": settings.app_env,
         "trading_enabled": False,
+        "paper_trading_enabled": True,
         "symbol": settings.normalized_symbol,
         "market_stream_connected": stream.connected,
         "market_data_age_ms": age,
@@ -202,7 +222,7 @@ async def portfolio_reconcile() -> dict:
 async def risk_status() -> dict:
     return {
         "trading_enabled": False,
-        "mode": "dry_run_only",
+        "mode": "paper_only",
         "base_asset": settings.normalized_base_asset,
         "quote_asset": settings.normalized_quote_asset,
         **risk_engine.status(),
@@ -220,9 +240,9 @@ async def risk_evaluate(proposal: RiskProposal) -> dict:
     else:
         price = Decimal(0)
 
-    base_total = await portfolio_state.balance_total(settings.normalized_base_asset)
+    base_total = await paper_executor.base_balance()
     current_position_notional = base_total * price
-    open_orders_count = await portfolio_state.open_order_count()
+    open_orders_count = await paper_executor.open_order_count()
     decision = risk_engine.evaluate(
         side=proposal.side,
         quantity=proposal.quantity,
@@ -252,6 +272,102 @@ async def risk_evaluate(proposal: RiskProposal) -> dict:
         "market_data_age_ms": market_age_ms,
         **decision.as_dict(),
     }
+
+
+@app.get("/paper/status")
+async def paper_status() -> dict:
+    snap = await market_state.snapshot()
+    mark_price = None if snap is None else snap.midpoint
+    return await paper_executor.snapshot(mark_price)
+
+
+@app.get("/paper/orders")
+async def paper_orders() -> dict:
+    snap = await paper_executor.snapshot()
+    return {"orders": snap["orders"], "open_orders": snap["open_orders"]}
+
+
+@app.post("/paper/orders")
+async def paper_submit(proposal: PaperOrderProposal) -> dict:
+    quote = await market_state.snapshot()
+    market_age_ms = await market_state.age_ms()
+    if quote is None:
+        raise HTTPException(status_code=503, detail="market data unavailable")
+
+    side = proposal.side.upper().strip()
+    order_type = proposal.order_type.upper().strip()
+    if order_type not in {"MARKET", "LIMIT"}:
+        raise HTTPException(status_code=400, detail="order_type must be MARKET or LIMIT")
+    if order_type == "LIMIT" and proposal.limit_price is None:
+        raise HTTPException(status_code=400, detail="limit_price is required for LIMIT orders")
+
+    if order_type == "LIMIT":
+        risk_price = proposal.limit_price or Decimal(0)
+    elif side == "BUY":
+        risk_price = quote.ask_price
+    else:
+        risk_price = quote.bid_price
+
+    paper_snap = await paper_executor.snapshot(quote.midpoint)
+    risk_engine.set_daily_realized_pnl(Decimal(paper_snap["realized_pnl"]))
+    current_position_notional = await paper_executor.base_balance() * risk_price
+    open_orders_count = await paper_executor.open_order_count()
+    client_order_id = proposal.client_order_id or f"paper-{uuid.uuid4().hex[:20]}"
+    decision = risk_engine.evaluate(
+        side=side,
+        quantity=proposal.quantity,
+        price=risk_price,
+        market_age_ms=market_age_ms,
+        open_orders_count=open_orders_count,
+        current_position_notional=current_position_notional,
+        client_order_id=client_order_id,
+        consume=True,
+    )
+    event_bus.publish(
+        EventType.RISK_APPROVED if decision.approved else EventType.RISK_REJECTED,
+        {
+            "paper": True,
+            "client_order_id": client_order_id,
+            "side": side,
+            "quantity": str(proposal.quantity),
+            "price": str(risk_price),
+            "reason": decision.reason.value,
+        },
+    )
+    if not decision.approved:
+        return {"accepted": False, "paper": True, **decision.as_dict()}
+
+    try:
+        order = await paper_executor.submit(
+            side=side,
+            order_type=order_type,
+            quantity=proposal.quantity,
+            quote=quote,
+            client_order_id=client_order_id,
+            limit_price=proposal.limit_price,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    current = await paper_executor.snapshot(quote.midpoint)
+    risk_engine.set_daily_realized_pnl(Decimal(current["realized_pnl"]))
+    return {
+        "accepted": order.status != "REJECTED",
+        "paper": True,
+        "order": PaperExecutor._serialize(order),
+        "risk": decision.as_dict(),
+    }
+
+
+@app.post("/paper/orders/{order_id}/cancel")
+async def paper_cancel(order_id: int) -> dict:
+    try:
+        order = await paper_executor.cancel(order_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"paper": True, "order": PaperExecutor._serialize(order)}
 
 
 @app.get("/events/stats")
