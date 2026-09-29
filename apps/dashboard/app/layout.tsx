@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Binance Fast Bot",
-  description: "Read-only trading engine control plane",
+  title: "Taddy Control Center",
+  description: "Paper market automation, risk, replay and system observability",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
