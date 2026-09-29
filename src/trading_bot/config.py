@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     port: int = 8000
 
     binance_symbol: str = "BTCUSDT"
+    binance_base_asset: str = "BTC"
+    binance_quote_asset: str = "USDT"
     market_stale_after_ms: int = Field(default=5000, ge=100)
     portfolio_reconcile_seconds: int = Field(default=60, ge=10)
 
@@ -34,6 +36,14 @@ class Settings(BaseSettings):
     @property
     def normalized_symbol(self) -> str:
         return self.binance_symbol.upper().strip()
+
+    @property
+    def normalized_base_asset(self) -> str:
+        return self.binance_base_asset.upper().strip()
+
+    @property
+    def normalized_quote_asset(self) -> str:
+        return self.binance_quote_asset.upper().strip()
 
     def assert_safe_startup(self) -> None:
         if self.trading_enabled:
