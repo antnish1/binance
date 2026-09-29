@@ -80,7 +80,7 @@ class PortfolioState:
             return
         delta = Decimal(str(event.get("d", "0")))
         async with self._lock:
-            current = self._balances.get(asset, Balance(asset, Decimal("0"), Decimal("0")))
+            current = self._balances.get(asset, Balance(asset, Decimal(0), Decimal(0)))
             self._balances[asset] = Balance(asset, current.free + delta, current.locked)
             self.last_account_update_ms = int(event.get("E", 0) or 0)
 
